@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -30,10 +29,7 @@ export default function LoginPage() {
     if (error) {
       console.error(error);
 
-      setMessage(
-        error.message
-      );
-
+      setMessage(error.message);
       setLoading(false);
       return;
     }
@@ -117,12 +113,12 @@ export default function LoginPage() {
         <div className="mt-6 text-center text-sm text-slate-500">
           Don&apos;t have an account?{" "}
 
-          <Link
+          <a
             href="/signup"
             className="font-medium text-slate-900 hover:underline"
           >
-            Create one
-          </Link>
+            Create Account
+          </a>
         </div>
 
       </div>
