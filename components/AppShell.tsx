@@ -14,7 +14,8 @@ export default function AppShell({
     usePathname();
 
   const isAuthPage =
-    pathname === "/login";
+    pathname === "/login" ||
+    pathname === "/signup";
 
   if (isAuthPage) {
     return (
@@ -116,7 +117,7 @@ export default function AppShell({
       {/* Main Content */}
       <div className="min-w-0 flex-1 bg-slate-100 pb-20 md:pb-0">
 
-        {/* Mobile Production Bar */}
+        {/* Mobile Production Selector */}
         <div className="border-b border-slate-200 bg-slate-900 p-4 text-white md:hidden">
           <ProductionSwitcher />
         </div>
