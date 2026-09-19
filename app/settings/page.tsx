@@ -1,6 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import { createClient } from "@/lib/supabase/client";
 
 type Production = {
@@ -8,42 +14,110 @@ type Production = {
   production_name: string;
   stage_manager: string;
   assistant_stage_manager: string | null;
-  original_budget: number;
   vat_rate: number;
   allocation_date: string | null;
 };
 
+type BudgetRow = {
+  production_id: string;
+  original_budget: number;
+};
+
+type Allocation = {
+  id: string;
+  name: string;
+  category:
+    | "Props"
+    | "Stage Management";
+  allocated_amount: number;
+};
+
 export default function SettingsPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(
+    () => createClient(),
+    []
+  );
 
-  const [production, setProduction] =
-    useState<Production | null>(null);
+  const [
+    production,
+    setProduction,
+  ] = useState<Production | null>(
+    null
+  );
 
-  const [productionName, setProductionName] = useState("");
-  const [stageManager, setStageManager] = useState("");
-  const [assistantStageManager, setAssistantStageManager] =
-    useState("");
-  const [originalBudget, setOriginalBudget] = useState("");
-  const [vatRate, setVatRate] = useState("");
-  const [allocationDate, setAllocationDate] = useState("");
+  const [
+    productionName,
+    setProductionName,
+  ] = useState("");
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const [messageType, setMessageType] =
-    useState<"success" | "error" | "">("");
+  const [
+    stageManager,
+    setStageManager,
+  ] = useState("");
+
+  const [
+    assistantStageManager,
+    setAssistantStageManager,
+  ] = useState("");
+
+  const [
+    originalBudget,
+    setOriginalBudget,
+  ] = useState("");
+
+  const [
+    propsBudget,
+    setPropsBudget,
+  ] = useState("");
+
+  const [
+    stageManagementBudget,
+    setStageManagementBudget,
+  ] = useState("");
+
+  const [
+    vatRate,
+    setVatRate,
+  ] = useState("");
+
+  const [
+    allocationDate,
+    setAllocationDate,
+  ] = useState("");
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
+
+  const [
+    saving,
+    setSaving,
+  ] = useState(false);
+
+  const [
+    message,
+    setMessage,
+  ] = useState("");
+
+  const [
+    success,
+    setSuccess,
+  ] = useState(false);
 
   useEffect(() => {
-    loadProduction();
+    loadSettings();
   }, []);
 
-  async function loadProduction() {
+  async function loadSettings() {
     setLoading(true);
     setMessage("");
-    setMessageType("");
+    setSuccess(false);
 
     const activeProductionId =
-      localStorage.getItem("activeProductionId");
+      localStorage.getItem(
+        "activeProductionId"
+      );
 
     if (!activeProductionId) {
       setProduction(null);
@@ -51,63 +125,184 @@ export default function SettingsPage() {
       return;
     }
 
-    const { data, error } = await supabase
+    const {
+      data: productionData,
+      error: productionError,
+    } = await supabase
       .from("productions")
       .select(`
         id,
         production_name,
         stage_manager,
         assistant_stage_manager,
-        original_budget,
         vat_rate,
         allocation_date
       `)
-      .eq("id", activeProductionId)
+      .eq(
+        "id",
+        activeProductionId
+      )
       .single();
 
-    if (error || !data) {
-      console.error(error);
+    if (
+      productionError ||
+      !productionData
+    ) {
+      console.error(
+        productionError
+      );
 
       setMessage(
-        "Could not load the active production."
+        "Could not load production settings."
       );
-      setMessageType("error");
-      setProduction(null);
+
       setLoading(false);
       return;
     }
 
-    const productionData =
-      data as Production;
+    const {
+      data: budgetData,
+      error: budgetError,
+    } = await supabase
+      .from(
+        "production_budgets"
+      )
+      .select(`
+        production_id,
+        original_budget
+      `)
+      .eq(
+        "production_id",
+        activeProductionId
+      )
+      .maybeSingle();
 
-    setProduction(productionData);
+    if (budgetError) {
+      console.error(
+        budgetError
+      );
+
+      setMessage(
+        "Production loaded, but the master budget could not be loaded."
+      );
+
+      setLoading(false);
+      return;
+    }
+
+    const {
+      data: allocationData,
+      error: allocationError,
+    } = await supabase
+      .from(
+        "budget_allocations"
+      )
+      .select(`
+        id,
+        name,
+        category,
+        allocated_amount
+      `)
+      .eq(
+        "production_id",
+        activeProductionId
+      );
+
+    if (allocationError) {
+      console.error(
+        allocationError
+      );
+
+      setMessage(
+        "Production loaded, but budget allocations could not be loaded."
+      );
+
+      setLoading(false);
+      return;
+    }
+
+    const currentProduction =
+      productionData as Production;
+
+    const currentBudget =
+      budgetData as BudgetRow | null;
+
+    const allocations =
+      (allocationData as Allocation[]) ??
+      [];
+
+    const propsAllocation =
+      allocations.find(
+        (allocation) =>
+          allocation.category ===
+            "Props" &&
+          allocation.name
+            .trim()
+            .toLowerCase() ===
+            "props"
+      );
+
+    const stageManagementAllocation =
+      allocations.find(
+        (allocation) =>
+          allocation.category ===
+            "Stage Management" &&
+          allocation.name
+            .trim()
+            .toLowerCase() ===
+            "stage management"
+      );
+
+    setProduction(
+      currentProduction
+    );
 
     setProductionName(
-      productionData.production_name
+      currentProduction.production_name
     );
 
     setStageManager(
-      productionData.stage_manager
+      currentProduction.stage_manager
     );
 
     setAssistantStageManager(
-      productionData.assistant_stage_manager ?? ""
-    );
-
-    setOriginalBudget(
-      Number(
-        productionData.original_budget
-      ).toString()
+      currentProduction.assistant_stage_manager ??
+        ""
     );
 
     setVatRate(
-      Number(
-        productionData.vat_rate
-      ).toString()
+      String(
+        currentProduction.vat_rate
+      )
     );
 
     setAllocationDate(
-      productionData.allocation_date ?? ""
+      currentProduction.allocation_date ??
+        ""
+    );
+
+    setOriginalBudget(
+      currentBudget
+        ? String(
+            currentBudget.original_budget
+          )
+        : ""
+    );
+
+    setPropsBudget(
+      propsAllocation
+        ? String(
+            propsAllocation.allocated_amount
+          )
+        : "0"
+    );
+
+    setStageManagementBudget(
+      stageManagementAllocation
+        ? String(
+            stageManagementAllocation.allocated_amount
+          )
+        : "0"
     );
 
     setLoading(false);
@@ -119,105 +314,150 @@ export default function SettingsPage() {
     event.preventDefault();
 
     if (!production) {
-      setMessage(
-        "No active production selected."
-      );
-      setMessageType("error");
-      return;
-    }
-
-    const budget =
-      Number(originalBudget);
-
-    const vat =
-      Number(vatRate);
-
-    if (
-      !productionName.trim() ||
-      !stageManager.trim() ||
-      budget <= 0 ||
-      vat < 0
-    ) {
-      setMessage(
-        "Please complete all required production details."
-      );
-      setMessageType("error");
       return;
     }
 
     setSaving(true);
     setMessage("");
-    setMessageType("");
+    setSuccess(false);
 
-    const { data, error } = await supabase
-      .from("productions")
-      .update({
-        production_name:
-          productionName.trim(),
-
-        stage_manager:
-          stageManager.trim(),
-
-        assistant_stage_manager:
-          assistantStageManager.trim() ||
-          null,
-
-        original_budget:
-          budget,
-
-        vat_rate:
-          vat,
-
-        allocation_date:
-          allocationDate || null,
-      })
-      .eq("id", production.id)
-      .select(`
-        id,
-        production_name,
-        stage_manager,
-        assistant_stage_manager,
-        original_budget,
-        vat_rate,
-        allocation_date
-      `)
-      .single();
-
-    if (error || !data) {
-      console.error(error);
-
-      setMessage(
-        error?.message ||
-          "Could not save production settings."
+    const masterBudget =
+      Number(
+        originalBudget
       );
 
-      setMessageType("error");
+    const props =
+      Number(
+        propsBudget
+      );
+
+    const stageManagement =
+      Number(
+        stageManagementBudget
+      );
+
+    const vat =
+      Number(
+        vatRate
+      );
+
+    if (
+      !productionName.trim() ||
+      !stageManager.trim() ||
+      masterBudget < 0 ||
+      props < 0 ||
+      stageManagement < 0 ||
+      vat < 0
+    ) {
+      setMessage(
+        "Please check the production details."
+      );
+
       setSaving(false);
       return;
     }
 
-    setProduction(
-      data as Production
+    const {
+      error,
+    } = await supabase.rpc(
+      "update_production_with_budgets",
+      {
+        production_id_input:
+          production.id,
+
+        production_name_input:
+          productionName.trim(),
+
+        stage_manager_input:
+          stageManager.trim(),
+
+        assistant_stage_manager_input:
+          assistantStageManager.trim(),
+
+        master_budget_input:
+          masterBudget,
+
+        props_budget_input:
+          props,
+
+        stage_management_budget_input:
+          stageManagement,
+
+        vat_rate_input:
+          vat,
+
+        allocation_date_input:
+          allocationDate ||
+          null,
+      }
     );
+
+    if (error) {
+      console.error(
+        error
+      );
+
+      setMessage(
+        error.message
+      );
+
+      setSaving(false);
+      return;
+    }
+
+    setProduction({
+      ...production,
+
+      production_name:
+        productionName.trim(),
+
+      stage_manager:
+        stageManager.trim(),
+
+      assistant_stage_manager:
+        assistantStageManager.trim() ||
+        null,
+
+      vat_rate:
+        vat,
+
+      allocation_date:
+        allocationDate ||
+        null,
+    });
+
+    setSuccess(true);
 
     setMessage(
-      "Production settings saved successfully."
+      "Production settings and default budgets updated successfully."
     );
 
-    setMessageType("success");
     setSaving(false);
   }
 
+  const masterBudgetNumber =
+    Number(originalBudget) || 0;
+
+  const propsBudgetNumber =
+    Number(propsBudget) || 0;
+
+  const stageManagementBudgetNumber =
+    Number(stageManagementBudget) || 0;
+
+  const allocatedTotal =
+    propsBudgetNumber +
+    stageManagementBudgetNumber;
+
+  const unallocatedBudget =
+    masterBudgetNumber -
+    allocatedTotal;
+
   if (loading) {
     return (
-      <main className="p-6 text-slate-900 md:p-10">
-        <div className="mx-auto max-w-4xl">
-          <div className="rounded-2xl bg-white p-8 shadow-sm">
-            <p className="text-slate-500">
-              Loading production settings...
-            </p>
-          </div>
-        </div>
+      <main className="p-6 md:p-10">
+        <p className="text-slate-500">
+          Loading settings...
+        </p>
       </main>
     );
   }
@@ -227,35 +467,16 @@ export default function SettingsPage() {
       <main className="p-6 text-slate-900 md:p-10">
         <div className="mx-auto max-w-4xl">
 
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold">
-              Settings
-            </h1>
-
-            <p className="mt-2 text-slate-500">
-              Production and budget settings
-            </p>
-          </div>
-
           <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
+
             <p className="text-lg font-medium">
               No active production
             </p>
 
             <p className="mt-2 text-slate-500">
-              Select or create a production before editing settings.
+              Select a production before editing settings.
             </p>
 
-            <button
-              type="button"
-              onClick={() =>
-                (window.location.href =
-                  "/productions")
-              }
-              className="mt-6 rounded-xl bg-slate-900 px-5 py-3 font-medium text-white hover:bg-slate-800"
-            >
-              Go to Productions
-            </button>
           </div>
 
         </div>
@@ -264,165 +485,355 @@ export default function SettingsPage() {
   }
 
   return (
-    <main className="p-6 text-slate-900 md:p-10">
+    <main className="min-h-screen p-6 text-slate-900 md:p-10">
       <div className="mx-auto max-w-4xl">
 
         <div className="mb-8">
+
           <h1 className="text-3xl font-bold">
             Settings
           </h1>
 
           <p className="mt-2 text-slate-500">
-            Edit settings for{" "}
-            <span className="font-medium text-slate-700">
-              {production.production_name}
-            </span>
+            Manage the active production.
           </p>
+
         </div>
 
-        <form
-          onSubmit={handleSave}
-          className="rounded-2xl bg-white p-6 shadow-sm md:p-8"
-        >
-          <div className="grid gap-6 md:grid-cols-2">
+        <div className="rounded-2xl bg-white p-6 shadow-sm md:p-8">
 
-            <div className="md:col-span-2">
+          <div className="mb-6">
+
+            <h2 className="text-xl font-semibold">
+              Production Settings
+            </h2>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Update production details and default budgets.
+            </p>
+
+          </div>
+
+          <form
+            onSubmit={
+              handleSave
+            }
+            className="space-y-6"
+          >
+
+            <div>
+
               <label className="mb-2 block text-sm font-medium">
                 Production Name
               </label>
 
               <input
-                value={productionName}
-                onChange={(e) =>
-                  setProductionName(
-                    e.target.value
-                  )
-                }
-                required
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Stage Manager
-              </label>
-
-              <input
-                value={stageManager}
-                onChange={(e) =>
-                  setStageManager(
-                    e.target.value
-                  )
-                }
-                required
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Assistant Stage Manager
-              </label>
-
-              <input
+                type="text"
                 value={
-                  assistantStageManager
+                  productionName
                 }
-                onChange={(e) =>
-                  setAssistantStageManager(
-                    e.target.value
+                onChange={(
+                  event
+                ) =>
+                  setProductionName(
+                    event.target.value
                   )
                 }
-                placeholder="Optional"
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                required
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
               />
+
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-2">
+
+              <div>
+
+                <label className="mb-2 block text-sm font-medium">
+                  Stage Manager
+                </label>
+
+                <input
+                  type="text"
+                  value={
+                    stageManager
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setStageManager(
+                      event.target.value
+                    )
+                  }
+                  required
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
+                />
+
+              </div>
+
+              <div>
+
+                <label className="mb-2 block text-sm font-medium">
+                  Assistant Stage Manager
+                </label>
+
+                <input
+                  type="text"
+                  value={
+                    assistantStageManager
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setAssistantStageManager(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Optional"
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
+                />
+
+              </div>
+
             </div>
 
             <div>
+
               <label className="mb-2 block text-sm font-medium">
-                Original Budget
+                Master Budget
               </label>
 
               <input
                 type="number"
                 min="0"
                 step="0.01"
-                value={originalBudget}
-                onChange={(e) =>
+                value={
+                  originalBudget
+                }
+                onChange={(
+                  event
+                ) =>
                   setOriginalBudget(
-                    e.target.value
+                    event.target.value
                   )
                 }
                 required
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
               />
+
+              <p className="mt-2 text-xs text-slate-500">
+                Full production budget. Restricted members will not receive this value.
+              </p>
+
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                VAT Rate %
-              </label>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
 
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                value={vatRate}
-                onChange={(e) =>
-                  setVatRate(
-                    e.target.value
-                  )
+              <div>
+
+                <h3 className="font-semibold">
+                  Default Allocations
+                </h3>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Update the starting Props and Stage Management budget allocations.
+                </p>
+
+              </div>
+
+              <div className="mt-5 grid gap-5 md:grid-cols-2">
+
+                <div>
+
+                  <label className="mb-2 block text-sm font-medium">
+                    Props Budget
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={
+                      propsBudget
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      setPropsBudget(
+                        event.target.value
+                      )
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none transition focus:border-slate-500"
+                  />
+
+                </div>
+
+                <div>
+
+                  <label className="mb-2 block text-sm font-medium">
+                    Stage Management Budget
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={
+                      stageManagementBudget
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      setStageManagementBudget(
+                        event.target.value
+                      )
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none transition focus:border-slate-500"
+                  />
+
+                </div>
+
+              </div>
+
+              <div className="mt-5 border-t border-slate-200 pt-4">
+
+                <div className="flex justify-between gap-4 text-sm">
+
+                  <span className="text-slate-500">
+                    Default Allocations
+                  </span>
+
+                  <span className="font-medium">
+                    AED{" "}
+                    {allocatedTotal.toFixed(
+                      2
+                    )}
+                  </span>
+
+                </div>
+
+                <div className="mt-2 flex justify-between gap-4 text-sm">
+
+                  <span className="text-slate-500">
+                    Master Budget Remaining
+                  </span>
+
+                  <span
+                    className={`font-medium ${
+                      unallocatedBudget < 0
+                        ? "text-red-600"
+                        : ""
+                    }`}
+                  >
+                    AED{" "}
+                    {unallocatedBudget.toFixed(
+                      2
+                    )}
+                  </span>
+
+                </div>
+
+                {unallocatedBudget < 0 && (
+                  <p className="mt-3 text-xs text-red-600">
+                    The default allocations currently exceed the master budget.
+                  </p>
+                )}
+
+                <p className="mt-3 text-xs leading-5 text-slate-500">
+                  Custom allocations are managed separately on the Allocations page and are not changed here.
+                </p>
+
+              </div>
+
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-2">
+
+              <div>
+
+                <label className="mb-2 block text-sm font-medium">
+                  VAT %
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={
+                    vatRate
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setVatRate(
+                      event.target.value
+                    )
+                  }
+                  required
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
+                />
+
+              </div>
+
+              <div>
+
+                <label className="mb-2 block text-sm font-medium">
+                  Allocation Date
+                </label>
+
+                <input
+                  type="date"
+                  value={
+                    allocationDate
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setAllocationDate(
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-slate-500"
+                />
+
+              </div>
+
+            </div>
+
+            {message && (
+              <div
+                className={`rounded-xl px-4 py-3 text-sm ${
+                  success
+                    ? "bg-green-50 text-green-700"
+                    : "bg-red-50 text-red-700"
+                }`}
+              >
+                {message}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+
+              <button
+                type="submit"
+                disabled={
+                  saving
                 }
-                required
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-              />
+                className="rounded-xl bg-slate-900 px-6 py-3 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving
+                  ? "Saving..."
+                  : "Save Changes"}
+              </button>
+
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Allocation Date
-              </label>
+          </form>
 
-              <input
-                type="date"
-                value={allocationDate}
-                onChange={(e) =>
-                  setAllocationDate(
-                    e.target.value
-                  )
-                }
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-              />
-            </div>
+        </div>
 
-          </div>
-
-          {message && (
-            <div
-              className={`mt-6 rounded-xl px-4 py-3 text-sm ${
-                messageType === "success"
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-red-50 text-red-700"
-              }`}
-            >
-              {message}
-            </div>
-          )}
-
-          <div className="mt-8 flex justify-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {saving
-                ? "Saving..."
-                : "Save Settings"}
-            </button>
-          </div>
-
-        </form>
       </div>
     </main>
   );

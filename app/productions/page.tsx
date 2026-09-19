@@ -1,40 +1,126 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import { createClient } from "@/lib/supabase/client";
 
-type Production = {
+type AccessLevel =
+  | "Owner"
+  | "Admin"
+  | "Member"
+  | "Viewer";
+
+type ProductionRow = {
   id: string;
   production_name: string;
   stage_manager: string;
   assistant_stage_manager: string | null;
-  original_budget: number;
   vat_rate: number;
   allocation_date: string | null;
   created_at: string;
 };
 
+type BudgetRow = {
+  production_id: string;
+  original_budget: number;
+};
+
+type MembershipRow = {
+  production_id: string;
+  access_level: AccessLevel;
+  role: string;
+  can_edit_production: boolean;
+};
+
+type Production = ProductionRow & {
+  original_budget: number | null;
+  membership: MembershipRow | null;
+};
+
 export default function ProductionsPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(
+    () => createClient(),
+    []
+  );
 
-  const [productions, setProductions] = useState<Production[]>([]);
-  const [activeProductionId, setActiveProductionId] =
-    useState<string | null>(null);
+  const [
+    productions,
+    setProductions,
+  ] = useState<Production[]>([]);
 
-  const [productionName, setProductionName] = useState("");
-  const [stageManager, setStageManager] = useState("");
-  const [assistantStageManager, setAssistantStageManager] =
-    useState("");
-  const [originalBudget, setOriginalBudget] = useState("12000");
-  const [vatRate, setVatRate] = useState("5");
-  const [allocationDate, setAllocationDate] = useState("");
+  const [
+    activeProductionId,
+    setActiveProductionId,
+  ] = useState<string | null>(
+    null
+  );
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [deletingId, setDeletingId] =
-    useState<string | null>(null);
+  const [
+    productionName,
+    setProductionName,
+  ] = useState("");
 
-  const [message, setMessage] = useState("");
+  const [
+    stageManager,
+    setStageManager,
+  ] = useState("");
+
+  const [
+    assistantStageManager,
+    setAssistantStageManager,
+  ] = useState("");
+
+  const [
+    originalBudget,
+    setOriginalBudget,
+  ] = useState("12000");
+
+  const [
+    propsBudget,
+    setPropsBudget,
+  ] = useState("");
+
+  const [
+    stageManagementBudget,
+    setStageManagementBudget,
+  ] = useState("");
+
+  const [
+    vatRate,
+    setVatRate,
+  ] = useState("5");
+
+  const [
+    allocationDate,
+    setAllocationDate,
+  ] = useState("");
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
+
+  const [
+    saving,
+    setSaving,
+  ] = useState(false);
+
+  const [
+    deletingId,
+    setDeletingId,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    message,
+    setMessage,
+  ] = useState("");
 
   useEffect(() => {
     loadProductions();
@@ -44,49 +130,217 @@ export default function ProductionsPage() {
     setLoading(true);
     setMessage("");
 
-    const { data, error } = await supabase
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      userError ||
+      !user
+    ) {
+      setMessage(
+        "Could not identify the signed-in user."
+      );
+
+      setLoading(false);
+      return;
+    }
+
+    /*
+      Supabase RLS should return only
+      productions this user is allowed
+      to see.
+    */
+    const {
+      data: productionData,
+      error: productionError,
+    } = await supabase
       .from("productions")
       .select(`
         id,
         production_name,
         stage_manager,
         assistant_stage_manager,
-        original_budget,
         vat_rate,
         allocation_date,
         created_at
       `)
-      .order("created_at", {
-        ascending: false,
-      });
+      .order(
+        "created_at",
+        {
+          ascending: false,
+        }
+      );
 
-    if (error) {
-      console.error(error);
-      setMessage(error.message);
+    if (productionError) {
+      console.error(
+        productionError
+      );
+
+      setMessage(
+        productionError.message
+      );
+
       setLoading(false);
       return;
     }
 
-    const productionData =
-      (data as Production[]) ?? [];
+    const rows =
+      (productionData as ProductionRow[]) ??
+      [];
 
-    setProductions(productionData);
+    /*
+      Master budgets are protected by
+      their own RLS.
+
+      Restricted members simply won't
+      receive a budget row.
+    */
+    const {
+      data: budgetData,
+      error: budgetError,
+    } = await supabase
+      .from(
+        "production_budgets"
+      )
+      .select(`
+        production_id,
+        original_budget
+      `);
+
+    if (budgetError) {
+      console.error(
+        budgetError
+      );
+
+      setMessage(
+        "Productions loaded, but some budget information could not be loaded."
+      );
+    }
+
+    const budgets =
+      (budgetData as BudgetRow[]) ??
+      [];
+
+    const budgetMap =
+      new Map<string, number>();
+
+    budgets.forEach(
+      (budget) => {
+        budgetMap.set(
+          budget.production_id,
+          Number(
+            budget.original_budget
+          )
+        );
+      }
+    );
+
+    /*
+      Memberships are loaded for the
+      current user across all productions.
+
+      This matters because the same user
+      can have different roles in different
+      productions.
+    */
+    const {
+      data: membershipData,
+      error: membershipError,
+    } = await supabase
+      .from(
+        "production_members"
+      )
+      .select(`
+        production_id,
+        access_level,
+        role,
+        can_edit_production
+      `)
+      .eq(
+        "user_id",
+        user.id
+      );
+
+    if (membershipError) {
+      console.error(
+        membershipError
+      );
+
+      setMessage(
+        "Productions loaded, but membership permissions could not be loaded."
+      );
+    }
+
+    const memberships =
+      (membershipData as MembershipRow[]) ??
+      [];
+
+    const membershipMap =
+      new Map<
+        string,
+        MembershipRow
+      >();
+
+    memberships.forEach(
+      (membership) => {
+        membershipMap.set(
+          membership.production_id,
+          membership
+        );
+      }
+    );
+
+    const combinedProductions:
+      Production[] =
+      rows.map(
+        (production) => ({
+          ...production,
+
+          original_budget:
+            budgetMap.get(
+              production.id
+            ) ?? null,
+
+          membership:
+            membershipMap.get(
+              production.id
+            ) ?? null,
+        })
+      );
+
+    setProductions(
+      combinedProductions
+    );
 
     const savedActiveId =
-      localStorage.getItem("activeProductionId");
+      localStorage.getItem(
+        "activeProductionId"
+      );
 
     const activeStillExists =
       savedActiveId &&
-      productionData.some(
+      combinedProductions.some(
         (production) =>
-          production.id === savedActiveId
+          production.id ===
+          savedActiveId
       );
 
-    if (activeStillExists && savedActiveId) {
-      setActiveProductionId(savedActiveId);
-    } else if (productionData.length > 0) {
+    if (
+      activeStillExists &&
+      savedActiveId
+    ) {
+      setActiveProductionId(
+        savedActiveId
+      );
+    } else if (
+      combinedProductions.length >
+      0
+    ) {
       const firstProductionId =
-        productionData[0].id;
+        combinedProductions[0].id;
 
       localStorage.setItem(
         "activeProductionId",
@@ -101,7 +355,9 @@ export default function ProductionsPage() {
         "activeProductionId"
       );
 
-      setActiveProductionId(null);
+      setActiveProductionId(
+        null
+      );
     }
 
     setLoading(false);
@@ -114,16 +370,32 @@ export default function ProductionsPage() {
 
     setMessage("");
 
-    const budget =
-      Number(originalBudget);
+    const masterBudget =
+      Number(
+        originalBudget
+      );
+
+    const props =
+      Number(
+        propsBudget
+      );
+
+    const stageManagement =
+      Number(
+        stageManagementBudget
+      );
 
     const vat =
-      Number(vatRate);
+      Number(
+        vatRate
+      );
 
     if (
       !productionName.trim() ||
       !stageManager.trim() ||
-      budget <= 0 ||
+      masterBudget <= 0 ||
+      props < 0 ||
+      stageManagement < 0 ||
       vat < 0
     ) {
       setMessage(
@@ -136,48 +408,42 @@ export default function ProductionsPage() {
     setSaving(true);
 
     const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      setMessage(
-        "Could not identify the signed-in user."
-      );
-
-      setSaving(false);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("productions")
-      .insert({
-        owner_id: user.id,
-
-        production_name:
+      data,
+      error,
+    } = await supabase.rpc(
+      "create_production_with_budgets",
+      {
+        production_name_input:
           productionName.trim(),
 
-        stage_manager:
+        stage_manager_input:
           stageManager.trim(),
 
-        assistant_stage_manager:
-          assistantStageManager.trim() ||
-          null,
+        assistant_stage_manager_input:
+          assistantStageManager.trim(),
 
-        original_budget:
-          budget,
+        master_budget_input:
+          masterBudget,
 
-        vat_rate:
+        props_budget_input:
+          props,
+
+        stage_management_budget_input:
+          stageManagement,
+
+        vat_rate_input:
           vat,
 
-        allocation_date:
-          allocationDate || null,
-      })
-      .select()
-      .single();
+        allocation_date_input:
+          allocationDate ||
+          null,
+      }
+    );
 
     if (error) {
-      console.error(error);
+      console.error(
+        error
+      );
 
       setMessage(
         error.message
@@ -187,24 +453,46 @@ export default function ProductionsPage() {
       return;
     }
 
+    const newProductionId =
+      data as string;
+
+    if (!newProductionId) {
+      setMessage(
+        "Production was created, but its ID could not be returned."
+      );
+
+      setSaving(false);
+      return;
+    }
+
     localStorage.setItem(
       "activeProductionId",
-      data.id
+      newProductionId
     );
 
     setActiveProductionId(
-      data.id
+      newProductionId
     );
 
     setProductionName("");
     setStageManager("");
     setAssistantStageManager("");
-    setOriginalBudget("12000");
-    setVatRate("5");
+
+    setOriginalBudget(
+      "12000"
+    );
+
+    setPropsBudget("");
+    setStageManagementBudget("");
+
+    setVatRate(
+      "5"
+    );
+
     setAllocationDate("");
 
     setMessage(
-      "Production created successfully."
+      "Production created successfully with Props and Stage Management allocations."
     );
 
     setSaving(false);
@@ -224,15 +512,38 @@ export default function ProductionsPage() {
       productionId
     );
 
+    /*
+      Reload intentionally forces all
+      active-production permissions and
+      data to refresh.
+    */
     window.location.reload();
   }
 
   async function handleDeleteProduction(
     production: Production
   ) {
+    /*
+      UI safeguard.
+
+      Permanent deletion is reserved for
+      the Owner of this specific production.
+    */
+    if (
+      production.membership
+        ?.access_level !==
+      "Owner"
+    ) {
+      setMessage(
+        "Only the production owner can delete this production."
+      );
+
+      return;
+    }
+
     const confirmed =
       window.confirm(
-        `Delete "${production.production_name}"?\n\nThis will permanently delete the production and all purchases connected to it. This cannot be undone.`
+        `Delete "${production.production_name}"?\n\nThis will permanently delete the production, its purchases, budget allocations and team membership data. This cannot be undone.`
       );
 
     if (!confirmed) {
@@ -245,26 +556,39 @@ export default function ProductionsPage() {
 
     setMessage("");
 
-    const { error } = await supabase
-      .from("productions")
+    const {
+      error,
+    } = await supabase
+      .from(
+        "productions"
+      )
       .delete()
-      .eq("id", production.id);
+      .eq(
+        "id",
+        production.id
+      );
 
     if (error) {
-      console.error(error);
+      console.error(
+        error
+      );
 
       setMessage(
         error.message
       );
 
-      setDeletingId(null);
+      setDeletingId(
+        null
+      );
+
       return;
     }
 
     const updatedProductions =
       productions.filter(
         (item) =>
-          item.id !== production.id
+          item.id !==
+          production.id
       );
 
     setProductions(
@@ -277,7 +601,8 @@ export default function ProductionsPage() {
 
     if (wasActive) {
       if (
-        updatedProductions.length > 0
+        updatedProductions.length >
+        0
       ) {
         const nextProductionId =
           updatedProductions[0].id;
@@ -301,28 +626,78 @@ export default function ProductionsPage() {
       }
     }
 
-    setDeletingId(null);
+    setDeletingId(
+      null
+    );
 
     setMessage(
       "Production deleted successfully."
     );
   }
 
+  function formatMoney(
+    value: number | null
+  ) {
+    if (
+      value === null
+    ) {
+      return "Restricted";
+    }
+
+    return `AED ${value.toLocaleString(
+      "en-AE",
+      {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }
+    )}`;
+  }
+
+  const masterBudgetNumber =
+    Number(
+      originalBudget
+    ) || 0;
+
+  const propsBudgetNumber =
+    Number(
+      propsBudget
+    ) || 0;
+
+  const stageManagementBudgetNumber =
+    Number(
+      stageManagementBudget
+    ) || 0;
+
+  const allocatedTotal =
+    propsBudgetNumber +
+    stageManagementBudgetNumber;
+
+  const unallocatedBudget =
+    masterBudgetNumber -
+    allocatedTotal;
+
   return (
     <main className="min-h-screen p-6 text-slate-900 md:p-10">
+
       <div className="mx-auto max-w-7xl">
 
         <div className="mb-8">
+
           <h1 className="text-3xl font-bold">
             Productions
           </h1>
 
           <p className="mt-2 text-slate-500">
-            Create, switch and manage productions
+            Create productions and switch between the productions you are part of.
           </p>
+
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
+
+          {/* ==================================================
+              CREATE PRODUCTION
+          ================================================== */}
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
 
@@ -331,7 +706,7 @@ export default function ProductionsPage() {
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
-              Create a new production budget.
+              Create a new production. You will become its Owner.
             </p>
 
             <form
@@ -342,6 +717,7 @@ export default function ProductionsPage() {
             >
 
               <div>
+
                 <label className="mb-2 block text-sm font-medium">
                   Production Name
                 </label>
@@ -350,18 +726,22 @@ export default function ProductionsPage() {
                   value={
                     productionName
                   }
-                  onChange={(e) =>
+                  onChange={(
+                    event
+                  ) =>
                     setProductionName(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   required
                   placeholder="Production name"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                 />
+
               </div>
 
               <div>
+
                 <label className="mb-2 block text-sm font-medium">
                   Stage Manager
                 </label>
@@ -370,18 +750,22 @@ export default function ProductionsPage() {
                   value={
                     stageManager
                   }
-                  onChange={(e) =>
+                  onChange={(
+                    event
+                  ) =>
                     setStageManager(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   required
                   placeholder="Stage Manager"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                 />
+
               </div>
 
               <div>
+
                 <label className="mb-2 block text-sm font-medium">
                   Assistant Stage Manager
                 </label>
@@ -390,41 +774,167 @@ export default function ProductionsPage() {
                   value={
                     assistantStageManager
                   }
-                  onChange={(e) =>
+                  onChange={(
+                    event
+                  ) =>
                     setAssistantStageManager(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   placeholder="Optional"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                 />
+
+              </div>
+
+              <div>
+
+                <label className="mb-2 block text-sm font-medium">
+                  Master Budget
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={
+                    originalBudget
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setOriginalBudget(
+                      event.target.value
+                    )
+                  }
+                  required
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                />
+
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+
+                <p className="font-medium">
+                  Default Allocations
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  These two budget allocations will be created automatically with the production.
+                </p>
+
+                <div className="mt-4 space-y-4">
+
+                  <div>
+
+                    <label className="mb-2 block text-sm font-medium">
+                      Props Budget
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={
+                        propsBudget
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        setPropsBudget(
+                          event.target.value
+                        )
+                      }
+                      required
+                      placeholder="0.00"
+                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-slate-500"
+                    />
+
+                  </div>
+
+                  <div>
+
+                    <label className="mb-2 block text-sm font-medium">
+                      Stage Management Budget
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={
+                        stageManagementBudget
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        setStageManagementBudget(
+                          event.target.value
+                        )
+                      }
+                      required
+                      placeholder="0.00"
+                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-slate-500"
+                    />
+
+                  </div>
+
+                </div>
+
+                <div className="mt-4 border-t border-slate-200 pt-4 text-sm">
+
+                  <div className="flex justify-between gap-4">
+
+                    <span className="text-slate-500">
+                      Allocated
+                    </span>
+
+                    <span className="font-medium">
+                      AED{" "}
+                      {allocatedTotal.toFixed(
+                        2
+                      )}
+                    </span>
+
+                  </div>
+
+                  <div className="mt-2 flex justify-between gap-4">
+
+                    <span className="text-slate-500">
+                      Unallocated
+                    </span>
+
+                    <span
+                      className={`font-medium ${
+                        unallocatedBudget <
+                        0
+                          ? "text-red-600"
+                          : ""
+                      }`}
+                    >
+                      AED{" "}
+                      {unallocatedBudget.toFixed(
+                        2
+                      )}
+                    </span>
+
+                  </div>
+
+                  {unallocatedBudget <
+                    0 && (
+                    <p className="mt-3 text-xs leading-5 text-red-600">
+                      Your default allocations currently exceed the master budget.
+                    </p>
+                  )}
+
+                </div>
+
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium">
-                    Budget
-                  </label>
 
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={
-                      originalBudget
-                    }
-                    onChange={(e) =>
-                      setOriginalBudget(
-                        e.target.value
-                      )
-                    }
-                    required
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                  />
-                </div>
-
-                <div>
                   <label className="mb-2 block text-sm font-medium">
                     VAT %
                   </label>
@@ -436,35 +946,42 @@ export default function ProductionsPage() {
                     value={
                       vatRate
                     }
-                    onChange={(e) =>
+                    onChange={(
+                      event
+                    ) =>
                       setVatRate(
-                        e.target.value
+                        event.target.value
                       )
                     }
                     required
                     className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                   />
+
                 </div>
 
-              </div>
+                <div>
 
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Allocation Date
-                </label>
+                  <label className="mb-2 block text-sm font-medium">
+                    Allocation Date
+                  </label>
 
-                <input
-                  type="date"
-                  value={
-                    allocationDate
-                  }
-                  onChange={(e) =>
-                    setAllocationDate(
-                      e.target.value
-                    )
-                  }
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                />
+                  <input
+                    type="date"
+                    value={
+                      allocationDate
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      setAllocationDate(
+                        event.target.value
+                      )
+                    }
+                    className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                  />
+
+                </div>
+
               </div>
 
               <button
@@ -483,18 +1000,24 @@ export default function ProductionsPage() {
 
           </div>
 
+          {/* ==================================================
+              PRODUCTION LIST
+          ================================================== */}
+
           <div>
 
             <div className="mb-4 flex items-center justify-between">
 
               <div>
+
                 <h2 className="text-xl font-semibold">
                   Your Productions
                 </h2>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Choose which production you want to work on.
+                  Your role and access can be different in each production.
                 </p>
+
               </div>
 
               {!loading && (
@@ -518,13 +1041,18 @@ export default function ProductionsPage() {
             )}
 
             {loading ? (
+
               <div className="rounded-2xl bg-white p-8 shadow-sm">
+
                 <p className="text-slate-500">
                   Loading productions...
                 </p>
+
               </div>
+
             ) : productions.length ===
               0 ? (
+
               <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
 
                 <p className="text-lg font-medium">
@@ -536,7 +1064,9 @@ export default function ProductionsPage() {
                 </p>
 
               </div>
+
             ) : (
+
               <div className="grid gap-4">
 
                 {productions.map(
@@ -550,6 +1080,11 @@ export default function ProductionsPage() {
                     const isDeleting =
                       deletingId ===
                       production.id;
+
+                    const isOwner =
+                      production.membership
+                        ?.access_level ===
+                      "Owner";
 
                     return (
                       <div
@@ -581,6 +1116,18 @@ export default function ProductionsPage() {
                                 </span>
                               )}
 
+                              {production.membership && (
+                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                                  {
+                                    production.membership.role
+                                  }
+                                  {" • "}
+                                  {
+                                    production.membership.access_level
+                                  }
+                                </span>
+                              )}
+
                             </div>
 
                             <p className="mt-2 text-sm text-slate-500">
@@ -602,27 +1149,21 @@ export default function ProductionsPage() {
                             <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm">
 
                               <span>
+
                                 <span className="text-slate-500">
                                   Budget:{" "}
                                 </span>
 
                                 <span className="font-medium">
-                                  AED{" "}
-                                  {Number(
+                                  {formatMoney(
                                     production.original_budget
-                                  ).toLocaleString(
-                                    "en-AE",
-                                    {
-                                      minimumFractionDigits:
-                                        2,
-                                      maximumFractionDigits:
-                                        2,
-                                    }
                                   )}
                                 </span>
+
                               </span>
 
                               <span>
+
                                 <span className="text-slate-500">
                                   VAT:{" "}
                                 </span>
@@ -633,6 +1174,7 @@ export default function ProductionsPage() {
                                   }
                                   %
                                 </span>
+
                               </span>
 
                             </div>
@@ -642,6 +1184,7 @@ export default function ProductionsPage() {
                           <div className="flex flex-col gap-2 sm:min-w-[180px]">
 
                             {isActive ? (
+
                               <button
                                 type="button"
                                 disabled
@@ -649,7 +1192,9 @@ export default function ProductionsPage() {
                               >
                                 Current Production
                               </button>
+
                             ) : (
+
                               <button
                                 type="button"
                                 onClick={() =>
@@ -661,24 +1206,27 @@ export default function ProductionsPage() {
                               >
                                 Switch to Production
                               </button>
+
                             )}
 
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleDeleteProduction(
-                                  production
-                                )
-                              }
-                              disabled={
-                                isDeleting
-                              }
-                              className="rounded-xl border border-red-200 px-5 py-3 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {isDeleting
-                                ? "Deleting..."
-                                : "Delete Production"}
-                            </button>
+                            {isOwner && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDeleteProduction(
+                                    production
+                                  )
+                                }
+                                disabled={
+                                  isDeleting
+                                }
+                                className="rounded-xl border border-red-200 px-5 py-3 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isDeleting
+                                  ? "Deleting..."
+                                  : "Delete Production"}
+                              </button>
+                            )}
 
                           </div>
 
@@ -690,12 +1238,15 @@ export default function ProductionsPage() {
                 )}
 
               </div>
+
             )}
 
           </div>
 
         </div>
+
       </div>
+
     </main>
   );
 }

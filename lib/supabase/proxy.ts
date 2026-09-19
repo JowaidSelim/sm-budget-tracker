@@ -62,24 +62,56 @@ export async function updateSession(
 
   const isPublicAuthPage =
     pathname === "/login" ||
-    pathname === "/signup";
+    pathname === "/signup" ||
+    pathname === "/forgot-password" ||
+    pathname === "/update-password" ||
+    pathname.startsWith("/auth/callback");
 
-  if (!user && !isPublicAuthPage) {
+  /*
+    Logged-out users may access only
+    public authentication routes.
+  */
+  if (
+    !user &&
+    !isPublicAuthPage
+  ) {
     const url =
       request.nextUrl.clone();
 
-    url.pathname = "/login";
+    url.pathname =
+      "/login";
 
     return NextResponse.redirect(
       url
     );
   }
 
-  if (user && isPublicAuthPage) {
+  /*
+    Logged-in users should normally
+    not return to login/signup.
+
+    IMPORTANT:
+    Do NOT redirect logged-in users
+    away from /update-password because
+    Supabase password recovery creates
+    a temporary authenticated session.
+  */
+  const shouldRedirectAuthenticatedUser =
+    user &&
+    (
+      pathname === "/login" ||
+      pathname === "/signup" ||
+      pathname === "/forgot-password"
+    );
+
+  if (
+    shouldRedirectAuthenticatedUser
+  ) {
     const url =
       request.nextUrl.clone();
 
-    url.pathname = "/";
+    url.pathname =
+      "/";
 
     return NextResponse.redirect(
       url

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -75,9 +76,18 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              Password
-            </label>
+            <div className="mb-2 flex items-center justify-between gap-4">
+              <label className="block text-sm font-medium text-slate-700">
+                Password
+              </label>
+
+              <Link
+                href="/forgot-password"
+                className="text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
 
             <input
               type="password"
@@ -113,12 +123,12 @@ export default function LoginPage() {
         <div className="mt-6 text-center text-sm text-slate-500">
           Don&apos;t have an account?{" "}
 
-          <a
+          <Link
             href="/signup"
             className="font-medium text-slate-900 hover:underline"
           >
             Create Account
-          </a>
+          </Link>
         </div>
 
       </div>

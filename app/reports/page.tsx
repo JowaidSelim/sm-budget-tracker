@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
 import { createClient } from "@/lib/supabase/client";
 
 type Production = {
@@ -8,14 +13,35 @@ type Production = {
   production_name: string;
   stage_manager: string;
   assistant_stage_manager: string | null;
-  original_budget: number;
   vat_rate: number;
   allocation_date: string | null;
+};
+
+type ProductionBudget = {
+  production_id: string;
+  original_budget: number;
+};
+
+type Membership = {
+  can_export_reports: boolean;
+  can_view_budget: boolean;
+  can_view_props: boolean;
+  can_view_stage_management: boolean;
+};
+
+type BudgetAllocation = {
+  id: string;
+  production_id: string;
+  name: string;
+  category: string;
+  allocated_amount: number;
+  assigned_user_id: string | null;
 };
 
 type Purchase = {
   id: string;
   production_id: string;
+  allocation_id: string | null;
   receipt: string;
   purchase_date: string;
   category: string;
@@ -25,23 +51,64 @@ type Purchase = {
   total_including_vat: number;
 };
 
+type ReportMode =
+  | "full"
+  | "scoped"
+  | "none";
+
 export default function ReportsPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(
+    () => createClient(),
+    []
+  );
 
-  const [production, setProduction] =
-    useState<Production | null>(null);
+  const [
+    production,
+    setProduction,
+  ] = useState<Production | null>(
+    null
+  );
 
-  const [purchases, setPurchases] =
-    useState<Purchase[]>([]);
+  const [
+    membership,
+    setMembership,
+  ] = useState<Membership | null>(
+    null
+  );
 
-  const [loading, setLoading] =
-    useState(true);
+  const [
+    masterBudget,
+    setMasterBudget,
+  ] = useState<number | null>(
+    null
+  );
 
-  const [exporting, setExporting] =
-    useState(false);
+  const [
+    allocations,
+    setAllocations,
+  ] = useState<
+    BudgetAllocation[]
+  >([]);
 
-  const [message, setMessage] =
-    useState("");
+  const [
+    purchases,
+    setPurchases,
+  ] = useState<Purchase[]>([]);
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
+
+  const [
+    exporting,
+    setExporting,
+  ] = useState(false);
+
+  const [
+    message,
+    setMessage,
+  ] = useState("");
 
   useEffect(() => {
     loadReportData();
@@ -52,11 +119,95 @@ export default function ReportsPage() {
     setMessage("");
 
     const activeProductionId =
-      localStorage.getItem("activeProductionId");
+      localStorage.getItem(
+        "activeProductionId"
+      );
 
     if (!activeProductionId) {
       setProduction(null);
+      setMembership(null);
+      setMasterBudget(null);
+      setAllocations([]);
       setPurchases([]);
+      setLoading(false);
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      userError ||
+      !user
+    ) {
+      setMessage(
+        "Could not identify the signed-in user."
+      );
+
+      setLoading(false);
+      return;
+    }
+
+    /*
+      Membership determines what financial
+      areas this user may report on.
+    */
+    const {
+      data: membershipData,
+      error: membershipError,
+    } = await supabase
+      .from(
+        "production_members"
+      )
+      .select(`
+        can_export_reports,
+        can_view_budget,
+        can_view_props,
+        can_view_stage_management
+      `)
+      .eq(
+        "production_id",
+        activeProductionId
+      )
+      .eq(
+        "user_id",
+        user.id
+      )
+      .maybeSingle();
+
+    if (
+      membershipError ||
+      !membershipData
+    ) {
+      console.error(
+        membershipError
+      );
+
+      setMessage(
+        "Could not load your production permissions."
+      );
+
+      setLoading(false);
+      return;
+    }
+
+    const currentMembership =
+      membershipData as Membership;
+
+    setMembership(
+      currentMembership
+    );
+
+    /*
+      If reports are not permitted,
+      stop here.
+    */
+    if (
+      !currentMembership.can_export_reports
+    ) {
       setLoading(false);
       return;
     }
@@ -71,15 +222,22 @@ export default function ReportsPage() {
         production_name,
         stage_manager,
         assistant_stage_manager,
-        original_budget,
         vat_rate,
         allocation_date
       `)
-      .eq("id", activeProductionId)
+      .eq(
+        "id",
+        activeProductionId
+      )
       .single();
 
-    if (productionError || !productionData) {
-      console.error(productionError);
+    if (
+      productionError ||
+      !productionData
+    ) {
+      console.error(
+        productionError
+      );
 
       setMessage(
         "Could not load the active production."
@@ -93,6 +251,123 @@ export default function ReportsPage() {
       productionData as Production
     );
 
+    /*
+      Master budget is separate and
+      protected by its own RLS.
+    */
+    if (
+      currentMembership.can_view_budget
+    ) {
+      const {
+        data: budgetData,
+        error: budgetError,
+      } = await supabase
+        .from(
+          "production_budgets"
+        )
+        .select(`
+          production_id,
+          original_budget
+        `)
+        .eq(
+          "production_id",
+          activeProductionId
+        )
+        .maybeSingle();
+
+      if (budgetError) {
+        console.error(
+          budgetError
+        );
+      }
+
+      const secureBudget =
+        budgetData as
+          | ProductionBudget
+          | null;
+
+      setMasterBudget(
+        secureBudget
+          ? Number(
+              secureBudget.original_budget
+            )
+          : null
+      );
+    } else {
+      setMasterBudget(null);
+    }
+
+    /*
+      TEAM-BASED ALLOCATION VISIBILITY
+
+      SQL 22 makes category permission
+      the working boundary.
+
+      Example:
+      can_view_props = true
+
+      → all Props allocations visible
+      → regardless of assigned_user_id
+
+      assigned_user_id remains useful
+      as responsibility information,
+      not a security boundary.
+    */
+    const {
+      data: allocationData,
+      error: allocationError,
+    } = await supabase
+      .from(
+        "budget_allocations"
+      )
+      .select(`
+        id,
+        production_id,
+        name,
+        category,
+        allocated_amount,
+        assigned_user_id
+      `)
+      .eq(
+        "production_id",
+        activeProductionId
+      )
+      .order(
+        "created_at",
+        {
+          ascending: true,
+        }
+      );
+
+    if (allocationError) {
+      console.error(
+        allocationError
+      );
+
+      setMessage(
+        "Some budget allocation information could not be loaded."
+      );
+    }
+
+    const visibleAllocations =
+      (allocationData as
+        BudgetAllocation[]) ??
+      [];
+
+    setAllocations(
+      visibleAllocations
+    );
+
+    /*
+      TEAM-BASED PURCHASE VISIBILITY
+
+      Purchase RLS determines which
+      categories the user may see.
+
+      Multiple team members with the
+      same category permission work
+      from the same purchase data.
+    */
     const {
       data: purchaseData,
       error: purchaseError,
@@ -101,6 +376,7 @@ export default function ReportsPage() {
       .select(`
         id,
         production_id,
+        allocation_id,
         receipt,
         purchase_date,
         category,
@@ -121,7 +397,9 @@ export default function ReportsPage() {
       );
 
     if (purchaseError) {
-      console.error(purchaseError);
+      console.error(
+        purchaseError
+      );
 
       setMessage(
         "Could not load purchases."
@@ -132,14 +410,20 @@ export default function ReportsPage() {
       return;
     }
 
+    const visiblePurchases =
+      (purchaseData as Purchase[]) ??
+      [];
+
     setPurchases(
-      (purchaseData as Purchase[]) ?? []
+      visiblePurchases
     );
 
     setLoading(false);
   }
 
-  function money(value: number) {
+  function money(
+    value: number
+  ) {
     return `AED ${value.toLocaleString(
       "en-AE",
       {
@@ -157,10 +441,133 @@ export default function ReportsPage() {
       .toLowerCase();
   }
 
-  async function handleExcelExport() {
-    if (!production) return;
+  const reportMode:
+    ReportMode =
+    !membership ||
+    !membership.can_export_reports
+      ? "none"
+      : membership.can_view_budget
+        ? "full"
+        : "scoped";
 
-    const currentProduction = production;
+  const propsPurchases =
+    purchases.filter(
+      (purchase) =>
+        purchase.category ===
+        "Props"
+    );
+
+  const stageManagementPurchases =
+    purchases.filter(
+      (purchase) =>
+        purchase.category ===
+        "Stage Management"
+    );
+
+  const visibleCategories =
+    [
+      membership?.can_view_props
+        ? "Props"
+        : null,
+
+      membership
+        ?.can_view_stage_management
+        ? "Stage Management"
+        : null,
+    ].filter(
+      Boolean
+    ) as string[];
+
+  /*
+    For a scoped report, this now
+    represents the total budget of
+    all allocations the member's
+    category permissions allow them
+    to access.
+  */
+  const scopedAllocatedBudget =
+    allocations.reduce(
+      (
+        total,
+        allocation
+      ) =>
+        total +
+        Number(
+          allocation.allocated_amount
+        ),
+      0
+    );
+
+  const totalSpent =
+    purchases.reduce(
+      (
+        total,
+        purchase
+      ) =>
+        total +
+        Number(
+          purchase.total_including_vat
+        ),
+      0
+    );
+
+  const reportBudget =
+    reportMode === "full"
+      ? masterBudget
+      : scopedAllocatedBudget;
+
+  const remainingBudget =
+    reportBudget !== null
+      ? reportBudget -
+        totalSpent
+      : null;
+
+  const propsTotal =
+    propsPurchases.reduce(
+      (
+        total,
+        purchase
+      ) =>
+        total +
+        Number(
+          purchase.total_including_vat
+        ),
+      0
+    );
+
+  const stageManagementTotal =
+    stageManagementPurchases.reduce(
+      (
+        total,
+        purchase
+      ) =>
+        total +
+        Number(
+          purchase.total_including_vat
+        ),
+      0
+    );
+
+  async function handleExcelExport() {
+    if (!production) {
+      return;
+    }
+
+    if (!membership) {
+      return;
+    }
+
+    if (
+      !membership.can_export_reports
+    ) {
+      return;
+    }
+
+    const currentProduction =
+      production;
+
+    const currentReportMode =
+      reportMode;
 
     setExporting(true);
     setMessage("");
@@ -198,67 +605,6 @@ export default function ReportsPage() {
       const noteFill =
         "FFE2E8F0";
 
-      const propsPurchases =
-        purchases.filter(
-          (purchase) =>
-            purchase.category ===
-            "Props"
-        );
-
-      const smPurchases =
-        purchases.filter(
-          (purchase) =>
-            purchase.category ===
-            "Stage Management"
-        );
-
-      const pettyCashPurchases =
-        purchases.filter(
-          (purchase) =>
-            normalizePaymentMethod(
-              purchase.payment_method
-            ) === "petty cash"
-        );
-
-      const creditCardPurchases =
-        purchases.filter(
-          (purchase) =>
-            normalizePaymentMethod(
-              purchase.payment_method
-            ) === "credit card"
-        );
-
-      const poPurchases =
-        purchases.filter(
-          (purchase) =>
-            normalizePaymentMethod(
-              purchase.payment_method
-            ) === "purchase order"
-        );
-
-      function styleSectionHeader(
-        worksheet: any,
-        cellAddress: string
-      ) {
-        const cell =
-          worksheet.getCell(
-            cellAddress
-          );
-
-        cell.font = {
-          bold: true,
-          size: 14,
-        };
-
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: {
-            argb: lightFill,
-          },
-        };
-      }
-
       function styleTableHeader(
         row: any
       ) {
@@ -267,79 +613,31 @@ export default function ReportsPage() {
             cell.font = {
               bold: true,
               color: {
-                argb: "FFFFFFFF",
+                argb:
+                  "FFFFFFFF",
               },
             };
 
             cell.fill = {
-              type: "pattern",
-              pattern: "solid",
+              type:
+                "pattern",
+              pattern:
+                "solid",
               fgColor: {
-                argb: headerFill,
+                argb:
+                  headerFill,
               },
             };
 
             cell.alignment = {
-              vertical: "middle",
-              horizontal: "center",
+              vertical:
+                "middle",
+              horizontal:
+                "center",
             };
           }
         );
       }
-
-      function addExportNote(
-        worksheet: any
-      ) {
-        worksheet.mergeCells(
-          "A5:H5"
-        );
-
-        const noteCell =
-          worksheet.getCell(
-            "A5"
-          );
-
-        noteCell.value =
-          "Snapshot export from SM Budget Tracker. Add or edit purchases in the application and re-export for the latest data.";
-
-        noteCell.font = {
-          italic: true,
-          size: 10,
-          color: {
-            argb: "FF475569",
-          },
-        };
-
-        noteCell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: {
-            argb: noteFill,
-          },
-        };
-
-        noteCell.alignment = {
-          wrapText: true,
-          vertical: "middle",
-        };
-
-        worksheet.getRow(
-          5
-        ).height = 32;
-      }
-
-      /*
-        Overall sheet first
-      */
-
-      const overall =
-        workbook.addWorksheet(
-          "Overall Budget Tracker"
-        );
-
-      /*
-        Helper to build the 5 purchase sheets
-      */
 
       function addPurchaseSheet(
         sheetName: string,
@@ -354,27 +652,30 @@ export default function ReportsPage() {
           "A1:H1"
         );
 
-        const titleCell =
-          worksheet.getCell(
-            "A1"
-          );
-
-        titleCell.value =
+        worksheet.getCell(
+          "A1"
+        ).value =
           sheetName;
 
-        titleCell.font = {
+        worksheet.getCell(
+          "A1"
+        ).font = {
           bold: true,
           size: 18,
           color: {
-            argb: "FFFFFFFF",
+            argb:
+              "FFFFFFFF",
           },
         };
 
-        titleCell.fill = {
+        worksheet.getCell(
+          "A1"
+        ).fill = {
           type: "pattern",
           pattern: "solid",
           fgColor: {
-            argb: headerFill,
+            argb:
+              headerFill,
           },
         };
 
@@ -403,9 +704,39 @@ export default function ReportsPage() {
         ).numFmt =
           "0.00%";
 
-        addExportNote(
-          worksheet
+        worksheet.mergeCells(
+          "A5:H5"
         );
+
+        worksheet.getCell(
+          "A5"
+        ).value =
+          currentReportMode ===
+          "full"
+            ? "Full production report exported from SM Budget Tracker."
+            : "Authorized report containing only the budget areas and purchases this user is permitted to access.";
+
+        worksheet.getCell(
+          "A5"
+        ).font = {
+          italic: true,
+          size: 10,
+          color: {
+            argb:
+              "FF475569",
+          },
+        };
+
+        worksheet.getCell(
+          "A5"
+        ).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: {
+            argb:
+              noteFill,
+          },
+        };
 
         const headerRow =
           worksheet.getRow(
@@ -433,7 +764,8 @@ export default function ReportsPage() {
             index
           ) => {
             const rowNumber =
-              8 + index;
+              8 +
+              index;
 
             const row =
               worksheet.getRow(
@@ -445,15 +777,12 @@ export default function ReportsPage() {
             ).value =
               purchase.receipt;
 
-            const dateValue =
-              new Date(
-                `${purchase.purchase_date}T00:00:00`
-              );
-
             row.getCell(
               2
             ).value =
-              dateValue;
+              new Date(
+                `${purchase.purchase_date}T00:00:00`
+              );
 
             row.getCell(
               2
@@ -499,17 +828,17 @@ export default function ReportsPage() {
             row.getCell(
               6
             ).numFmt =
-              '#,##0.00';
+              "#,##0.00";
 
             row.getCell(
               7
             ).numFmt =
-              '#,##0.00';
+              "#,##0.00";
 
             row.getCell(
               8
             ).numFmt =
-              '#,##0.00';
+              "#,##0.00";
           }
         );
 
@@ -524,7 +853,8 @@ export default function ReportsPage() {
             : 8;
 
         const totalRow =
-          lastDataRow + 2;
+          lastDataRow +
+          2;
 
         worksheet.getCell(
           `E${totalRow}`
@@ -573,8 +903,10 @@ export default function ReportsPage() {
         }
 
         for (
-          let column = 5;
-          column <= 8;
+          let column =
+            5;
+          column <=
+          8;
           column++
         ) {
           const cell =
@@ -588,18 +920,22 @@ export default function ReportsPage() {
           };
 
           cell.fill = {
-            type: "pattern",
-            pattern: "solid",
+            type:
+              "pattern",
+            pattern:
+              "solid",
             fgColor: {
-              argb: lightFill,
+              argb:
+                lightFill,
             },
           };
 
           if (
-            column >= 6
+            column >=
+            6
           ) {
             cell.numFmt =
-              '#,##0.00';
+              "#,##0.00";
           }
         }
 
@@ -630,472 +966,479 @@ export default function ReportsPage() {
           },
         ];
 
-        worksheet.views = [
-          {
-            state:
-              "frozen",
-            ySplit: 7,
-          },
-        ];
-
         return totalRow;
       }
 
       /*
-        Build all five purchase views
+        ===================================================
+        FULL PRODUCTION EXPORT
+        ===================================================
       */
-
-      const propsTotalRow =
-        addPurchaseSheet(
-          "Props Expenditure",
-          propsPurchases
-        );
-
-      const smTotalRow =
-        addPurchaseSheet(
-          "Stage Management Expenditure",
-          smPurchases
-        );
-
-      const pettyCashTotalRow =
-        addPurchaseSheet(
-          "Petty Cash Purchases",
-          pettyCashPurchases
-        );
-
-      const creditCardTotalRow =
-        addPurchaseSheet(
-          "Credit Card Purchases",
-          creditCardPurchases
-        );
-
-      const poTotalRow =
-        addPurchaseSheet(
-          "Purchase Order Purchases",
-          poPurchases
-        );
-
-      /*
-        Build Overall Budget Tracker
-      */
-
-      overall.mergeCells(
-        "A1:D1"
-      );
-
-      overall.getCell(
-        "A1"
-      ).value =
-        "Overall Budget Tracker";
-
-      overall.getCell(
-        "A1"
-      ).font = {
-        bold: true,
-        size: 20,
-        color: {
-          argb: "FFFFFFFF",
-        },
-      };
-
-      overall.getCell(
-        "A1"
-      ).fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: {
-          argb: headerFill,
-        },
-      };
-
-      overall.getRow(
-        1
-      ).height =
-        30;
-
-      overall.getCell(
-        "A3"
-      ).value =
-        "Production";
-
-      overall.getCell(
-        "B3"
-      ).value =
-        currentProduction.production_name;
-
-      overall.getCell(
-        "A4"
-      ).value =
-        "Stage Manager";
-
-      overall.getCell(
-        "B4"
-      ).value =
-        currentProduction.stage_manager;
-
-      overall.getCell(
-        "A5"
-      ).value =
-        "Assistant Stage Manager";
-
-      overall.getCell(
-        "B5"
-      ).value =
-        currentProduction.assistant_stage_manager ??
-        "";
-
-      overall.getCell(
-        "A6"
-      ).value =
-        "Allocation Date";
 
       if (
-        currentProduction.allocation_date
+        currentReportMode ===
+        "full"
       ) {
-        overall.getCell(
-          "B6"
-        ).value =
-          new Date(
-            `${currentProduction.allocation_date}T00:00:00`
+        if (
+          masterBudget ===
+          null
+        ) {
+          throw new Error(
+            "Master budget unavailable."
+          );
+        }
+
+        const overall =
+          workbook.addWorksheet(
+            "Overall Budget Tracker"
           );
 
-        overall.getCell(
-          "B6"
-        ).numFmt =
-          "dd-mmm-yyyy";
-      }
+        const propsTotalRow =
+          addPurchaseSheet(
+            "Props Expenditure",
+            propsPurchases
+          );
 
-      overall.getCell(
-        "A7"
-      ).value =
-        "VAT Rate";
+        const smTotalRow =
+          addPurchaseSheet(
+            "Stage Management Expenditure",
+            stageManagementPurchases
+          );
 
-      overall.getCell(
-        "B7"
-      ).value =
-        vatRate / 100;
+        const pettyCash =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "petty cash"
+          );
 
-      overall.getCell(
-        "B7"
-      ).numFmt =
-        "0.00%";
+        const creditCard =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "credit card"
+          );
 
-      overall.mergeCells(
-        "A8:D8"
-      );
+        const purchaseOrder =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "purchase order"
+          );
 
-      overall.getCell(
-        "A8"
-      ).value =
-        "Snapshot export from SM Budget Tracker. Add or edit purchases in the application and re-export for the latest data.";
+        const pettyCashTotalRow =
+          addPurchaseSheet(
+            "Petty Cash Purchases",
+            pettyCash
+          );
 
-      overall.getCell(
-        "A8"
-      ).font = {
-        italic: true,
-        size: 10,
-        color: {
-          argb: "FF475569",
-        },
-      };
+        const creditCardTotalRow =
+          addPurchaseSheet(
+            "Credit Card Purchases",
+            creditCard
+          );
 
-      overall.getCell(
-        "A8"
-      ).fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: {
-          argb: noteFill,
-        },
-      };
+        const poTotalRow =
+          addPurchaseSheet(
+            "Purchase Order Purchases",
+            purchaseOrder
+          );
 
-      overall.getCell(
-        "A8"
-      ).alignment = {
-        wrapText: true,
-      };
-
-      overall.getRow(
-        8
-      ).height =
-        32;
-
-      styleSectionHeader(
-        overall,
-        "A10"
-      );
-
-      overall.getCell(
-        "A10"
-      ).value =
-        "Budget Summary";
-
-      overall.getCell(
-        "A12"
-      ).value =
-        "Original Budget";
-
-      overall.getCell(
-        "B12"
-      ).value =
-        Number(
-          currentProduction.original_budget
+        overall.mergeCells(
+          "A1:D1"
         );
 
-      overall.getCell(
-        "A13"
-      ).value =
-        "Props Expenditure";
+        overall.getCell(
+          "A1"
+        ).value =
+          "Overall Budget Tracker";
 
-      overall.getCell(
-        "B13"
-      ).value = {
-        formula:
-          `'Props Expenditure'!F${propsTotalRow}`,
-      };
+        overall.getCell(
+          "A1"
+        ).font = {
+          bold: true,
+          size: 20,
+          color: {
+            argb:
+              "FFFFFFFF",
+          },
+        };
 
-      overall.getCell(
-        "A14"
-      ).value =
-        "Stage Management Expenditure";
+        overall.getCell(
+          "A1"
+        ).fill = {
+          type:
+            "pattern",
+          pattern:
+            "solid",
+          fgColor: {
+            argb:
+              headerFill,
+          },
+        };
 
-      overall.getCell(
-        "B14"
-      ).value = {
-        formula:
-          `'Stage Management Expenditure'!F${smTotalRow}`,
-      };
+        overall.getCell(
+          "A3"
+        ).value =
+          "Production";
 
-      overall.getCell(
-        "A15"
-      ).value =
-        "Total Expenditure";
+        overall.getCell(
+          "B3"
+        ).value =
+          currentProduction.production_name;
 
-      overall.getCell(
-        "B15"
-      ).value = {
-        formula:
-          "SUM(B13:B14)",
-      };
+        overall.getCell(
+          "A4"
+        ).value =
+          "Stage Manager";
 
-      overall.getCell(
-        "A16"
-      ).value =
-        "Remaining Budget";
+        overall.getCell(
+          "B4"
+        ).value =
+          currentProduction.stage_manager;
 
-      overall.getCell(
-        "B16"
-      ).value = {
-        formula:
-          "B12-B15",
-      };
+        overall.getCell(
+          "A5"
+        ).value =
+          "Assistant Stage Manager";
 
-      overall.getCell(
-        "A17"
-      ).value =
-        "Budget Used";
+        overall.getCell(
+          "B5"
+        ).value =
+          currentProduction.assistant_stage_manager ??
+          "";
 
-      overall.getCell(
-        "B17"
-      ).value = {
-        formula:
-          'IF(B12=0,0,B15/B12)',
-      };
+        overall.getCell(
+          "A7"
+        ).value =
+          "Master Budget";
 
-      overall.getCell(
-        "B17"
-      ).numFmt =
-        "0.00%";
+        overall.getCell(
+          "B7"
+        ).value =
+          masterBudget;
 
-      overall.getCell(
-        "A18"
-      ).value =
-        "Total VAT";
+        overall.getCell(
+          "A9"
+        ).value =
+          "Props Expenditure";
 
-      overall.getCell(
-        "B18"
-      ).value = {
-        formula:
-          `'Props Expenditure'!H${propsTotalRow}+'Stage Management Expenditure'!H${smTotalRow}`,
-      };
+        overall.getCell(
+          "B9"
+        ).value = {
+          formula:
+            `'Props Expenditure'!F${propsTotalRow}`,
+        };
 
-      styleSectionHeader(
-        overall,
-        "A21"
-      );
+        overall.getCell(
+          "A10"
+        ).value =
+          "Stage Management Expenditure";
 
-      overall.getCell(
-        "A21"
-      ).value =
-        "Payment Method Summary";
+        overall.getCell(
+          "B10"
+        ).value = {
+          formula:
+            `'Stage Management Expenditure'!F${smTotalRow}`,
+        };
 
-      overall.getCell(
-        "A23"
-      ).value =
-        "Petty Cash";
+        overall.getCell(
+          "A11"
+        ).value =
+          "Total Expenditure";
 
-      overall.getCell(
-        "B23"
-      ).value = {
-        formula:
-          `'Petty Cash Purchases'!F${pettyCashTotalRow}`,
-      };
+        overall.getCell(
+          "B11"
+        ).value = {
+          formula:
+            "SUM(B9:B10)",
+        };
 
-      overall.getCell(
-        "A24"
-      ).value =
-        "Credit Card";
+        overall.getCell(
+          "A12"
+        ).value =
+          "Remaining Budget";
 
-      overall.getCell(
-        "B24"
-      ).value = {
-        formula:
-          `'Credit Card Purchases'!F${creditCardTotalRow}`,
-      };
+        overall.getCell(
+          "B12"
+        ).value = {
+          formula:
+            "B7-B11",
+        };
 
-      overall.getCell(
-        "A25"
-      ).value =
-        "Purchase Order";
+        overall.getCell(
+          "A15"
+        ).value =
+          "Petty Cash";
 
-      overall.getCell(
-        "B25"
-      ).value = {
-        formula:
-          `'Purchase Order Purchases'!F${poTotalRow}`,
-      };
+        overall.getCell(
+          "B15"
+        ).value = {
+          formula:
+            `'Petty Cash Purchases'!F${pettyCashTotalRow}`,
+        };
 
-      overall.getCell(
-        "A26"
-      ).value =
-        "Payment Method Total";
+        overall.getCell(
+          "A16"
+        ).value =
+          "Credit Card";
 
-      overall.getCell(
-        "B26"
-      ).value = {
-        formula:
-          "SUM(B23:B25)",
-      };
+        overall.getCell(
+          "B16"
+        ).value = {
+          formula:
+            `'Credit Card Purchases'!F${creditCardTotalRow}`,
+        };
 
-      overall.getCell(
-        "A28"
-      ).value =
-        "Reconciliation Difference";
+        overall.getCell(
+          "A17"
+        ).value =
+          "Purchase Order";
 
-      overall.getCell(
-        "B28"
-      ).value = {
-        formula:
-          "B15-B26",
-      };
+        overall.getCell(
+          "B17"
+        ).value = {
+          formula:
+            `'Purchase Order Purchases'!F${poTotalRow}`,
+        };
 
-      overall.getCell(
-        "A29"
-      ).value =
-        "Reconciliation Status";
+        [
+          7,
+          9,
+          10,
+          11,
+          12,
+          15,
+          16,
+          17,
+        ].forEach(
+          (
+            row
+          ) => {
+            overall.getCell(
+              `B${row}`
+            ).numFmt =
+              "#,##0.00";
+          }
+        );
 
-      overall.getCell(
-        "B29"
-      ).value = {
-        formula:
-          'IF(ABS(B28)<0.01,"Balanced","Check Entries")',
-      };
-
-      [
-        12,
-        13,
-        14,
-        15,
-        16,
-        18,
-        23,
-        24,
-        25,
-        26,
-        28,
-      ].forEach(
-        (rowNumber) => {
-          overall.getCell(
-            `B${rowNumber}`
-          ).numFmt =
-            '#,##0.00';
-        }
-      );
-
-      [
-        15,
-        16,
-        26,
-        28,
-        29,
-      ].forEach(
-        (rowNumber) => {
-          overall.getCell(
-            `A${rowNumber}`
-          ).font = {
-            bold: true,
-          };
-
-          overall.getCell(
-            `B${rowNumber}`
-          ).font = {
-            bold: true,
-          };
-
-          overall.getCell(
-            `A${rowNumber}`
-          ).fill = {
-            type: "pattern",
-            pattern: "solid",
-            fgColor: {
-              argb: lightFill,
-            },
-          };
-
-          overall.getCell(
-            `B${rowNumber}`
-          ).fill = {
-            type: "pattern",
-            pattern: "solid",
-            fgColor: {
-              argb: lightFill,
-            },
-          };
-        }
-      );
-
-      overall.columns = [
-        {
-          width: 34,
-        },
-        {
-          width: 24,
-        },
-        {
-          width: 4,
-        },
-        {
-          width: 18,
-        },
-      ];
-
-      overall.views = [
-        {
-          state: "frozen",
-          ySplit: 1,
-        },
-      ];
+        overall.columns = [
+          {
+            width: 34,
+          },
+          {
+            width: 24,
+          },
+          {
+            width: 4,
+          },
+          {
+            width: 18,
+          },
+        ];
+      }
 
       /*
-        Generate Excel file
+        ===================================================
+        AUTHORIZED / RESTRICTED EXPORT
+        ===================================================
       */
+
+      if (
+        currentReportMode ===
+        "scoped"
+      ) {
+        const summary =
+          workbook.addWorksheet(
+            "Budget Summary"
+          );
+
+        summary.mergeCells(
+          "A1:D1"
+        );
+
+        summary.getCell(
+          "A1"
+        ).value =
+          "Authorized Budget Report";
+
+        summary.getCell(
+          "A1"
+        ).font = {
+          bold: true,
+          size: 20,
+          color: {
+            argb:
+              "FFFFFFFF",
+          },
+        };
+
+        summary.getCell(
+          "A1"
+        ).fill = {
+          type:
+            "pattern",
+          pattern:
+            "solid",
+          fgColor: {
+            argb:
+              headerFill,
+          },
+        };
+
+        summary.getCell(
+          "A3"
+        ).value =
+          "Production";
+
+        summary.getCell(
+          "B3"
+        ).value =
+          currentProduction.production_name;
+
+        summary.getCell(
+          "A5"
+        ).value =
+          "Accessible Budget";
+
+        summary.getCell(
+          "B5"
+        ).value =
+          scopedAllocatedBudget;
+
+        summary.getCell(
+          "A6"
+        ).value =
+          "Spent";
+
+        summary.getCell(
+          "B6"
+        ).value =
+          totalSpent;
+
+        summary.getCell(
+          "A7"
+        ).value =
+          "Remaining";
+
+        summary.getCell(
+          "B7"
+        ).value =
+          scopedAllocatedBudget -
+          totalSpent;
+
+        summary.getCell(
+          "A9"
+        ).value =
+          "Authorized Areas";
+
+        summary.getCell(
+          "B9"
+        ).value =
+          visibleCategories.join(
+            ", "
+          );
+
+        [
+          5,
+          6,
+          7,
+        ].forEach(
+          (
+            row
+          ) => {
+            summary.getCell(
+              `B${row}`
+            ).numFmt =
+              "#,##0.00";
+          }
+        );
+
+        summary.columns = [
+          {
+            width: 30,
+          },
+          {
+            width: 28,
+          },
+        ];
+
+        if (
+          membership.can_view_props
+        ) {
+          addPurchaseSheet(
+            "Props Purchases",
+            propsPurchases
+          );
+        }
+
+        if (
+          membership
+            .can_view_stage_management
+        ) {
+          addPurchaseSheet(
+            "Stage Management Purchases",
+            stageManagementPurchases
+          );
+        }
+
+        const pettyCash =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "petty cash"
+          );
+
+        const creditCard =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "credit card"
+          );
+
+        const purchaseOrder =
+          purchases.filter(
+            (purchase) =>
+              normalizePaymentMethod(
+                purchase.payment_method
+              ) ===
+              "purchase order"
+          );
+
+        addPurchaseSheet(
+          "Petty Cash Purchases",
+          pettyCash
+        );
+
+        addPurchaseSheet(
+          "Credit Card Purchases",
+          creditCard
+        );
+
+        addPurchaseSheet(
+          "Purchase Order Purchases",
+          purchaseOrder
+        );
+      }
 
       const buffer =
         await workbook.xlsx.writeBuffer();
 
       const blob =
         new Blob(
-          [buffer as BlobPart],
+          [
+            buffer as BlobPart,
+          ],
           {
             type:
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1103,7 +1446,8 @@ export default function ReportsPage() {
         );
 
       const safeName =
-        currentProduction.production_name
+        currentProduction
+          .production_name
           .replace(
             /[^a-z0-9]+/gi,
             "-"
@@ -1112,6 +1456,12 @@ export default function ReportsPage() {
             /^-+|-+$/g,
             ""
           );
+
+      const suffix =
+        currentReportMode ===
+        "full"
+          ? "budget"
+          : "authorized-budget";
 
       const url =
         URL.createObjectURL(
@@ -1130,7 +1480,7 @@ export default function ReportsPage() {
         `${
           safeName ||
           "production"
-        }-budget.xlsx`;
+        }-${suffix}.xlsx`;
 
       document.body.appendChild(
         link
@@ -1165,9 +1515,38 @@ export default function ReportsPage() {
   if (loading) {
     return (
       <main className="p-6 md:p-10">
+
         <p className="text-slate-500">
           Loading reports...
         </p>
+
+      </main>
+    );
+  }
+
+  if (
+    reportMode ===
+    "none"
+  ) {
+    return (
+      <main className="p-6 text-slate-900 md:p-10">
+
+        <div className="mx-auto max-w-5xl">
+
+          <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
+
+            <p className="text-lg font-semibold">
+              Reports unavailable
+            </p>
+
+            <p className="mt-2 text-sm text-slate-500">
+              You do not have permission to export reports for this production.
+            </p>
+
+          </div>
+
+        </div>
+
       </main>
     );
   }
@@ -1175,79 +1554,30 @@ export default function ReportsPage() {
   if (!production) {
     return (
       <main className="p-6 text-slate-900 md:p-10">
-        <div className="mx-auto max-w-7xl">
+
+        <div className="mx-auto max-w-5xl">
 
           <div className="rounded-2xl bg-white p-10 text-center shadow-sm">
-            <p className="text-lg font-medium">
+
+            <p className="text-lg font-semibold">
               No active production
             </p>
 
-            <p className="mt-2 text-slate-500">
-              Select a production before creating reports.
-            </p>
           </div>
 
         </div>
+
       </main>
     );
   }
 
-  const budget =
-    Number(
-      production.original_budget
-    );
-
-  const totalSpent =
-    purchases.reduce(
-      (sum, purchase) =>
-        sum +
-        Number(
-          purchase.total_including_vat
-        ),
-      0
-    );
-
-  const remaining =
-    budget -
-    totalSpent;
-
-  const propsTotal =
-    purchases
-      .filter(
-        (purchase) =>
-          purchase.category ===
-          "Props"
-      )
-      .reduce(
-        (sum, purchase) =>
-          sum +
-          Number(
-            purchase.total_including_vat
-          ),
-        0
-      );
-
-  const stageManagementTotal =
-    purchases
-      .filter(
-        (purchase) =>
-          purchase.category ===
-          "Stage Management"
-      )
-      .reduce(
-        (sum, purchase) =>
-          sum +
-          Number(
-            purchase.total_including_vat
-          ),
-        0
-      );
-
   return (
     <main className="min-h-screen p-6 text-slate-900 md:p-10">
+
       <div className="mx-auto max-w-7xl">
 
         <div className="mb-8">
+
           <h1 className="text-3xl font-bold">
             Reports
           </h1>
@@ -1257,47 +1587,87 @@ export default function ReportsPage() {
               production.production_name
             }
           </p>
+
+          <div className="mt-3">
+
+            <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+
+              {reportMode ===
+              "full"
+                ? "Full Production Report"
+                : "Authorized Budget Report"}
+
+            </span>
+
+          </div>
+
         </div>
+
+        {message && (
+          <div className="mb-6 rounded-xl bg-slate-200 px-4 py-3 text-sm text-slate-700">
+            {message}
+          </div>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
+
             <p className="text-sm text-slate-500">
-              Budget
+
+              {reportMode ===
+              "full"
+                ? "Master Budget"
+                : "Accessible Budget"}
+
             </p>
 
             <p className="mt-2 text-2xl font-bold">
+
               {money(
-                budget
+                reportBudget ??
+                0
               )}
+
             </p>
+
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
+
             <p className="text-sm text-slate-500">
-              Total Spent
+              Spent
             </p>
 
             <p className="mt-2 text-2xl font-bold">
+
               {money(
                 totalSpent
               )}
+
             </p>
+
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
+
             <p className="text-sm text-slate-500">
               Remaining
             </p>
 
             <p className="mt-2 text-2xl font-bold">
+
               {money(
-                remaining
+                remainingBudget ??
+                0
               )}
+
             </p>
+
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
+
             <p className="text-sm text-slate-500">
               Purchases
             </p>
@@ -1307,6 +1677,7 @@ export default function ReportsPage() {
                 purchases.length
               }
             </p>
+
           </div>
 
         </div>
@@ -1321,47 +1692,62 @@ export default function ReportsPage() {
 
             <div className="mt-6 space-y-4">
 
-              <div className="flex justify-between">
-                <span className="text-slate-500">
-                  Props
-                </span>
-
-                <span className="font-semibold">
-                  {money(
-                    propsTotal
-                  )}
-                </span>
-              </div>
-
-              <div className="flex justify-between">
-                <span className="text-slate-500">
-                  Stage Management
-                </span>
-
-                <span className="font-semibold">
-                  {money(
-                    stageManagementTotal
-                  )}
-                </span>
-              </div>
-
-              <div className="border-t border-slate-200 pt-4">
-
+              {membership
+                ?.can_view_props && (
                 <div className="flex justify-between">
-                  <span className="font-medium">
-                    Total
+
+                  <span className="text-slate-500">
+                    Props
                   </span>
 
-                  <span className="font-bold">
+                  <span className="font-semibold">
+
                     {money(
-                      totalSpent
+                      propsTotal
                     )}
+
                   </span>
+
                 </div>
+              )}
+
+              {membership
+                ?.can_view_stage_management && (
+                <div className="flex justify-between">
+
+                  <span className="text-slate-500">
+                    Stage Management
+                  </span>
+
+                  <span className="font-semibold">
+
+                    {money(
+                      stageManagementTotal
+                    )}
+
+                  </span>
+
+                </div>
+              )}
+
+              <div className="flex justify-between border-t border-slate-200 pt-4">
+
+                <span className="font-medium">
+                  Total
+                </span>
+
+                <span className="font-bold">
+
+                  {money(
+                    totalSpent
+                  )}
+
+                </span>
 
               </div>
 
             </div>
+
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm">
@@ -1371,22 +1757,61 @@ export default function ReportsPage() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-500">
-              Export the active production as a connected Excel workbook.
+
+              {reportMode ===
+              "full"
+                ? "Export the complete production budget workbook."
+                : "Export the budget areas and purchases you are authorized to access."}
+
             </p>
 
-            <div className="mt-6 rounded-xl bg-slate-100 p-4">
+            {reportMode ===
+              "scoped" &&
+              allocations.length >
+                0 && (
+                <div className="mt-5 rounded-xl bg-slate-100 p-4">
 
-              <p className="text-sm font-medium">
-                Six-Sheet Excel Workbook
-              </p>
+                  <p className="text-sm font-medium">
+                    Accessible Allocations
+                  </p>
 
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                Includes Overall Budget Tracker, Props Expenditure,
-                Stage Management Expenditure, Petty Cash Purchases,
-                Credit Card Purchases and Purchase Order Purchases.
-              </p>
+                  <div className="mt-3 space-y-2">
 
-            </div>
+                    {allocations.map(
+                      (
+                        allocation
+                      ) => (
+                        <div
+                          key={
+                            allocation.id
+                          }
+                          className="flex justify-between gap-4 text-sm"
+                        >
+
+                          <span className="text-slate-600">
+                            {
+                              allocation.name
+                            }
+                          </span>
+
+                          <span className="font-medium">
+
+                            {money(
+                              Number(
+                                allocation.allocated_amount
+                              )
+                            )}
+
+                          </span>
+
+                        </div>
+                      )
+                    )}
+
+                  </div>
+
+                </div>
+              )}
 
             <button
               type="button"
@@ -1398,22 +1823,22 @@ export default function ReportsPage() {
               }
               className="mt-6 w-full rounded-xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
+
               {exporting
                 ? "Creating Excel..."
-                : "Export Excel Workbook"}
-            </button>
+                : reportMode ===
+                    "full"
+                  ? "Export Full Workbook"
+                  : "Export Authorized Budget Report"}
 
-            {message && (
-              <p className="mt-4 text-sm text-slate-600">
-                {message}
-              </p>
-            )}
+            </button>
 
           </div>
 
         </div>
 
       </div>
+
     </main>
   );
 }

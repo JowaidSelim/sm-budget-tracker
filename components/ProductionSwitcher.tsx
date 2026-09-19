@@ -22,6 +22,28 @@ export default function ProductionSwitcher() {
   async function loadProductions() {
     setLoading(true);
 
+    /*
+      First confirm there is an authenticated user.
+
+      This component can briefly mount while auth/session
+      state is changing, especially around login/logout
+      and password-recovery flows.
+
+      If there is no user, simply stop here instead of
+      querying the protected productions table.
+    */
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setProductions([]);
+      setActiveProductionId("");
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("productions")
       .select(`
@@ -33,7 +55,13 @@ export default function ProductionSwitcher() {
       });
 
     if (error) {
-      console.error(error);
+      console.error(
+        "Could not load productions:",
+        error
+      );
+
+      setProductions([]);
+      setActiveProductionId("");
       setLoading(false);
       return;
     }
@@ -44,18 +72,28 @@ export default function ProductionSwitcher() {
     setProductions(productionData);
 
     const savedActiveId =
-      localStorage.getItem("activeProductionId");
+      localStorage.getItem(
+        "activeProductionId"
+      );
 
     const activeExists =
       savedActiveId &&
       productionData.some(
         (production) =>
-          production.id === savedActiveId
+          production.id ===
+          savedActiveId
       );
 
-    if (activeExists && savedActiveId) {
-      setActiveProductionId(savedActiveId);
-    } else if (productionData.length > 0) {
+    if (
+      activeExists &&
+      savedActiveId
+    ) {
+      setActiveProductionId(
+        savedActiveId
+      );
+    } else if (
+      productionData.length > 0
+    ) {
       const firstProductionId =
         productionData[0].id;
 
@@ -67,6 +105,17 @@ export default function ProductionSwitcher() {
       setActiveProductionId(
         firstProductionId
       );
+    } else {
+      /*
+        If this user has no available productions,
+        clear any stale production saved from a
+        different account.
+      */
+      localStorage.removeItem(
+        "activeProductionId"
+      );
+
+      setActiveProductionId("");
     }
 
     setLoading(false);
@@ -86,8 +135,8 @@ export default function ProductionSwitcher() {
 
     /*
       Reload the current page so Dashboard,
-      Purchases, Settings and Reports all
-      reload using the newly selected production.
+      Purchases, Team, Settings and Reports
+      reload using the selected production.
     */
     window.location.reload();
   }
@@ -102,7 +151,9 @@ export default function ProductionSwitcher() {
     );
   }
 
-  if (productions.length === 0) {
+  if (
+    productions.length === 0
+  ) {
     return (
       <div className="rounded-xl bg-slate-800 px-3 py-3">
         <p className="text-xs text-slate-400">
@@ -119,10 +170,12 @@ export default function ProductionSwitcher() {
       </label>
 
       <select
-        value={activeProductionId}
-        onChange={(e) =>
+        value={
+          activeProductionId
+        }
+        onChange={(event) =>
           handleChange(
-            e.target.value
+            event.target.value
           )
         }
         className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-white outline-none transition focus:border-slate-500"
@@ -130,10 +183,16 @@ export default function ProductionSwitcher() {
         {productions.map(
           (production) => (
             <option
-              key={production.id}
-              value={production.id}
+              key={
+                production.id
+              }
+              value={
+                production.id
+              }
             >
-              {production.production_name}
+              {
+                production.production_name
+              }
             </option>
           )
         )}
